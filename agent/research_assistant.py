@@ -9,12 +9,11 @@ from langgraph.graph import END, StateGraph, MessagesState
 from langgraph.managed import IsLastStep
 from langgraph.prebuilt import ToolNode
 
-from agent.tools import arxiv_search, calculator, web_search
+from agent.tools import hsk_vocab
 from agent.llama_guard import llama_guard, LlamaGuardOutput
 
 
 class AgentState(MessagesState):
-    safety: LlamaGuardOutput
     is_last_step: IsLastStep
 
 # NOTE: models with streaming=True will send tokens as they are generated
@@ -24,19 +23,14 @@ models = {
     "llama-3.1-70b": ChatGroq(model="llama-3.1-70b-versatile", temperature=0.5)
 }
 
-tools = [web_search, calculator]
-current_date = datetime.now().strftime("%B %d, %Y")
+tools = [hsk_vocab]
 instructions = f"""
-    You are a helpful research assistant with the ability to search the web for information.
-    Today's date is {current_date}.
+    You are a helpful chinese language tutor with the ability to search the HSK Curriculum for relevant vocabulary.
     
     NOTE: THE USER CAN'T SEE THE TOOL RESPONSE.
 
     A few things to remember:
-    - Please include markdown-formatted links to any citations used in your response. Only include one
-    or two citations per response unless more are needed. ONLY USE LINKS RETURNED BY THE TOOLS.
-    - Use calculator tool with numexpr to answer math questions. The user does not understand numexpr,
-      so for the final response, use human readable format - e.g. "300 * 200", not "(300 \\times 200)".
+    - Always use the HSK tool to retrieve HSK Curriculum vocabulary. 
     """
 
 def wrap_model(model: BaseChatModel):
@@ -64,48 +58,13 @@ async def acall_model(state: AgentState, config: RunnableConfig):
     return {"messages": [response]}
 
 
-async def llama_guard_input(state: AgentState, config: RunnableConfig):
-    safety_output = await llama_guard("User", state["messages"])
-    return {"safety": safety_output}
-
-async def block_unsafe_content(state: AgentState, config: RunnableConfig):
-    safety: LlamaGuardOutput = state["safety"]
-    output_messages = []
-
-    # Remove the last message if it's an AI message
-    last_message = state["messages"][-1]
-    if last_message.type == "ai":
-        output_messages.append(RemoveMessage(id=last_message.id))
-
-    content_warning = f"This conversation was flagged for unsafe content: {', '.join(safety.unsafe_categories)}"
-    output_messages.append(AIMessage(content=content_warning))
-    return {"messages": output_messages}
-
 # Define the graph
 agent = StateGraph(AgentState)
 agent.add_node("model", acall_model)
 agent.add_node("tools", ToolNode(tools))
-# agent.add_node("guard_input", llama_guard_input)
-# agent.add_node("block_unsafe_content", block_unsafe_content)
-# agent.set_entry_point("guard_input")
+
 agent.set_entry_point("model")
 
-# Check for unsafe input and block further processing if found
-# def unsafe_input(state: AgentState):
-#     safety: LlamaGuardOutput = state["safety"]
-#     match safety.safety_assessment:
-#         case "unsafe":
-#             return "block_unsafe_content"
-#         case _:
-#             return "model"
-# agent.add_conditional_edges(
-#     "guard_input",
-#     unsafe_input,
-#     {"block_unsafe_content": "block_unsafe_content", "model": "model"}
-# )
-
-# Always END after blocking unsafe content
-#agent.add_edge("block_unsafe_content", END)
 
 # Always run "model" after "tools"
 agent.add_edge("tools", "model")
@@ -132,21 +91,11 @@ if __name__ == "__main__":
     load_dotenv()
     
     async def main():
-        inputs = {"messages": [("user", "Find me a recipe for chocolate chip cookies")]}
+        inputs = {"messages": [("user", "tell me hsk words for legal systems")]}
         result = await research_assistant.ainvoke(
             inputs,
             config=RunnableConfig(configurable={"thread_id": uuid4()}),
         )
         result["messages"][-1].pretty_print()
-
-        # Draw the agent graph as png
-        # requires:
-        # brew install graphviz
-        # export CFLAGS="-I $(brew --prefix graphviz)/include"
-        # export LDFLAGS="-L $(brew --prefix graphviz)/lib"
-        # pip install pygraphviz
-        # 
-        # researcH_assistant.get_graph().draw_png("agent_diagram.png")
-
 
     asyncio.run(main())
